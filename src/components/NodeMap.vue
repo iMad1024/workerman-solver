@@ -991,14 +991,10 @@ export default {
       return this.graphStore.dpSelectedVertexSet;
     },
 
-    freeTargetSet() {
-      const targetSet = this.graphStore?.targetSet;
-      const townSet = this.graphStore?.townSet;
-      const set = new Set();
-      if (!targetSet) return set;
-
+    assignedTargetSet() {
       const sourceList = this.graphStore?.getActiveSource;
-      const assignedTargets = new Set();
+      const snap = this.graphStore?.displayReduceSnapshot;
+      const assigned = new Set();
 
       const hasValidSource = (raw) => {
         if (Array.isArray(raw)) return raw.some((t) => t != null);
@@ -1008,21 +1004,82 @@ export default {
       if (Array.isArray(sourceList)) {
         for (const entry of sourceList) {
           if (entry?.targetId != null && hasValidSource(entry.sourceId)) {
-            assignedTargets.add(Number(entry.targetId));
+            assigned.add(Number(entry.targetId));
           }
         }
       } else if (sourceList && typeof sourceList === 'object') {
         for (const [tKey, rawTowns] of Object.entries(sourceList)) {
           if (hasValidSource(rawTowns)) {
-            assignedTargets.add(Number(tKey));
+            assigned.add(Number(tKey));
           }
         }
       }
 
+      if (snap?.nodeClusters) {
+        for (const [clusterKey, members] of Object.entries(snap.nodeClusters)) {
+          if (Array.isArray(members) && members.some((m) => assigned.has(Number(m)))) {
+            assigned.add(Number(clusterKey));
+          }
+        }
+      }
+
+      return assigned;
+    },
+
+    absorbedAssignedTargetSet() {
+      const set = new Set();
+      if (Number(this.userStore?.plantzoneIconSize) !== 0) return set;
+
+      const targetSet = this.graphStore?.targetSet;
+      const townSet = this.graphStore?.townSet;
+      const assigned = this.assignedTargetSet;
+      if (!targetSet) return set;
+
+      const isTarget = (id) => targetSet.has(id) || targetSet.has(String(id));
+      const isTown = (id) => townSet?.has(id) || townSet?.has(String(id));
+
+      // 1. Child plantzone -> parent lookup
+      for (const t of assigned) {
+        const parent = this.gameStore?.plantzoneStatic?.[String(t)]?.parent;
+        if (parent != null) {
+          const p = Number(parent);
+          if (!isTown(p) && (isTarget(t) || isTarget(p))) {
+            set.add(p);
+          }
+        }
+      }
+
+      // 2. Fallback: parent -> children lookup
+      const parentSet = this.graphStore?.parentSet;
+      if (parentSet) {
+        for (const rawP of parentSet) {
+          const p = Number(rawP);
+          if (isTown(p)) continue;
+          const children =
+            this.gameStore?.nodes?.[p]?.children ||
+            this.gameStore?.nodes?.[String(p)]?.children ||
+            [];
+          if (children.some((c) => assigned.has(Number(c)) && (isTarget(Number(c)) || isTarget(p)))) {
+            set.add(p);
+          }
+        }
+      }
+
+      return set;
+    },
+
+    freeTargetSet() {
+      const targetSet = this.graphStore?.targetSet;
+      const townSet = this.graphStore?.townSet;
+      const assigned = this.assignedTargetSet;
+      const absorbedAssigned = this.absorbedAssignedTargetSet;
+      const set = new Set();
+      if (!targetSet) return set;
+
       for (const rawT of targetSet) {
         const t = Number(rawT);
         if (townSet?.has(t) || townSet?.has(String(t))) continue;
-        if (!assignedTargets.has(t)) {
+        if (!assigned.has(t) && !absorbedAssigned.has(t)) {
           set.add(t);
         }
       }
@@ -1042,7 +1099,8 @@ export default {
       const townSet = this.graphStore.townSet;
       const activeNodes = this.graphStore.activeNodeSet;
       const selSet = this.dpSelectedSet;
-      const freeTargetSet = this.freeTargetSet;
+
+      const absorbedAssignedSet = this.absorbedAssignedTargetSet;
 
       const bgIcons = this.altIconsCalc.filter((d) => {
         const key = Number(d.key);
@@ -1051,6 +1109,7 @@ export default {
           townSet?.has(d.key) ||
           activeTargetSet?.has(key) ||
           activeTargetSet?.has(d.key) ||
+          absorbedAssignedSet?.has(key) ||
           selSet?.has(key)
         );
       });
@@ -1497,6 +1556,8 @@ export default {
 
     makeAltIconsLayer() {
       const activeTargetSet = this.graphStore.targetSet;
+      const freeTargetSet = this.freeTargetSet;
+      const absorbedAssignedSet = this.absorbedAssignedTargetSet;
       const townSet = this.graphStore.townSet;
       const parentSet = this.graphStore.parentSet;
       const icon = this.altIconsCalc;
@@ -1511,7 +1572,11 @@ export default {
       const getDrawPriority = (d) => {
         const key = Number(d.key);
         if (townSet?.has(key) || townSet?.has(d.key)) return 3;
-        if (activeTargetSet?.has(key) || activeTargetSet?.has(d.key)) return 2;
+        if (
+          absorbedAssignedSet?.has(key) ||
+          activeTargetSet?.has(key) ||
+          activeTargetSet?.has(d.key)
+        ) return 2;
         if (isSolView && selSet?.has(key)) return 1;
         return 0;
       };
@@ -1622,8 +1687,9 @@ export default {
           getFillColor: d => {
             const key = Number(d.key);
             const isTown = townSet?.has(key) || townSet?.has(d.key);
-            const isFreeTarget = freeTargetSet?.has(key);
-            const isTarget = activeTargetSet?.has(key) || activeTargetSet?.has(d.key);
+            const isAbsorbedAssigned = absorbedAssignedSet?.has(key);
+            const isFreeTarget = !isAbsorbedAssigned && freeTargetSet?.has(key);
+            const isTarget = isAbsorbedAssigned || activeTargetSet?.has(key) || activeTargetSet?.has(d.key);
 
             if (this.isSolutionViewActive) {
               if (isTown) return [60, 60, 255, 255]; // Keep towns blue
@@ -1643,11 +1709,14 @@ export default {
 
             if (this.isSolutionViewActive) {
               const isTown = townSet?.has(numKey) || townSet?.has(nodeKey);
-              const isTarget = activeTargetSet?.has(numKey) || activeTargetSet?.has(nodeKey);
+              const isTarget =
+                absorbedAssignedSet?.has(numKey) ||
+                activeTargetSet?.has(numKey) ||
+                activeTargetSet?.has(nodeKey);
               if (isTown || isTarget || this.dpSelectedSet.has(numKey)) {
-                return [0, 0, 0, 255]; // Crisp black border on towns, targets, and selected green relay nodes
+                return [0, 0, 0, 255];
               }
-              return [255, 255, 255, 255]; // Unselected nodes -> complete white (including boundary)
+              return [255, 255, 255, 255];
             }
 
             const isPzSizeActive = (this.userStore?.plantzoneIconSize ?? 0) > 0;
@@ -1672,6 +1741,8 @@ export default {
               this.graphStore.reduceStepIndex,
               this.graphStore.targetSet,
               this.freeTargetSet,
+              this.absorbedAssignedTargetSet,
+              this.userStore.plantzoneIconSize,
               this.graphStore.dpSolution,
               this.graphStore.showSolutionView,
               this.userStore.targetSet?.size,
