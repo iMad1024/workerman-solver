@@ -292,6 +292,9 @@ export default {
   watch: {
     //iMad's changes
     ////////////////////////////////////////
+    freeTargetSet() {
+      this.updateLayers();
+    },
     'graphStore.legendResetTick'() {
       this.resetLegendPos();
     },
@@ -987,6 +990,44 @@ export default {
     dpSelectedSet() {
       return this.graphStore.dpSelectedVertexSet;
     },
+
+    freeTargetSet() {
+      const targetSet = this.graphStore?.targetSet;
+      const townSet = this.graphStore?.townSet;
+      const set = new Set();
+      if (!targetSet) return set;
+
+      const sourceList = this.graphStore?.getActiveSource;
+      const assignedTargets = new Set();
+
+      const hasValidSource = (raw) => {
+        if (Array.isArray(raw)) return raw.some((t) => t != null);
+        return raw != null;
+      };
+
+      if (Array.isArray(sourceList)) {
+        for (const entry of sourceList) {
+          if (entry?.targetId != null && hasValidSource(entry.sourceId)) {
+            assignedTargets.add(Number(entry.targetId));
+          }
+        }
+      } else if (sourceList && typeof sourceList === 'object') {
+        for (const [tKey, rawTowns] of Object.entries(sourceList)) {
+          if (hasValidSource(rawTowns)) {
+            assignedTargets.add(Number(tKey));
+          }
+        }
+      }
+
+      for (const rawT of targetSet) {
+        const t = Number(rawT);
+        if (townSet?.has(t) || townSet?.has(String(t))) continue;
+        if (!assignedTargets.has(t)) {
+          set.add(t);
+        }
+      }
+      return set;
+    },
   },
 
 
@@ -1001,6 +1042,7 @@ export default {
       const townSet = this.graphStore.townSet;
       const activeNodes = this.graphStore.activeNodeSet;
       const selSet = this.dpSelectedSet;
+      const freeTargetSet = this.freeTargetSet;
 
       const bgIcons = this.altIconsCalc.filter((d) => {
         const key = Number(d.key);
@@ -1579,14 +1621,20 @@ export default {
           // Color code based on Solution View vs. standard Abstract View
           getFillColor: d => {
             const key = Number(d.key);
+            const isTown = townSet?.has(key) || townSet?.has(d.key);
+            const isFreeTarget = freeTargetSet?.has(key);
+            const isTarget = activeTargetSet?.has(key) || activeTargetSet?.has(d.key);
+
             if (this.isSolutionViewActive) {
-              if (townSet?.has(key) || townSet?.has(d.key)) return [60, 60, 255, 255]; // Keep towns blue
-              if (activeTargetSet?.has(key) || activeTargetSet?.has(d.key)) return [255, 69, 58, 255]; // Keep targets red
+              if (isTown) return [60, 60, 255, 255]; // Keep towns blue
+              if (isFreeTarget) return [245, 158, 11, 255]; // Free targets -> amber / yellow-orange
+              if (isTarget) return [255, 69, 58, 255]; // Assigned targets -> red
               if (this.dpSelectedSet.has(key)) return [34, 197, 94, 255]; // Selected Steiner nodes -> green
               return [255, 255, 255, 255]; // Unselected nodes -> complete white
             }
-            if (townSet?.has(d.key)) return [60, 60, 255, 255]; // Blue for towns
-            if (activeTargetSet?.has(d.key)) return [255, 69, 58, 255]; // Vivid red for targets
+            if (isTown) return [60, 60, 255, 255]; // Blue for towns
+            if (isFreeTarget) return [245, 158, 11, 255]; // Amber / yellow-orange for free targets
+            if (isTarget) return [255, 69, 58, 255]; // Vivid red for assigned targets
             return [0, 0, 0, 255]; // Black for normal nodes
           },
           getLineColor: d => {
@@ -1623,6 +1671,7 @@ export default {
               this.graphStore.activeTab,
               this.graphStore.reduceStepIndex,
               this.graphStore.targetSet,
+              this.freeTargetSet,
               this.graphStore.dpSolution,
               this.graphStore.showSolutionView,
               this.userStore.targetSet?.size,
