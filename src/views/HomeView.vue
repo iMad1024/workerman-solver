@@ -29,7 +29,7 @@ import ExperimentPanel from '../components/ExperimentPanel.vue';
 import { buildContractedDpTree } from '../utils/graphReduction';
 import SteinerDpWorker from '../workers/steinerDp.worker.js?worker';
 
-import EmpireHighsTestPanel from '../components/EmpireHighsTestPanel.vue';
+//import EmpireHighsTestPanel from '../components/EmpireHighsTestPanel.vue';
 import PdfDetailsModal from '../components/PdfDetailsModal.vue';
 
 export default {
@@ -89,7 +89,7 @@ export default {
     SearchBar,
     GraphProcessingPanel,
     ExperimentPanel,
-    EmpireHighsTestPanel,
+    // EmpireHighsTestPanel,
     PdfDetailsModal,
   },
 
