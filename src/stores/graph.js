@@ -16,6 +16,8 @@ let cachedShuffledPool = null;
 let cachedFreeShuffleSeed = null;
 let cachedFreeShuffledPool = null;
 let lastReducedSignature = null;
+let lastReducedProfitRef = null;
+
 
 export const TREE_WORLD_W = 288;
 export const TREE_WORLD_H = 320;
@@ -1292,8 +1294,13 @@ export const useGraphStore = defineStore('graph', {
           ? `seed:${this.activeSeed}:${this.pzMode}:${this.topKPzCount}:${this.sourceMode}:${this.sourceScaleStep}:${this.freeTargetCount}`
           : `${this.instanceSource}:${this.uploadedFileName || ''}:${customSig}`;
 
-      if (!force && sig === lastReducedSignature && this.reducedGraph.length > 0) {
-        return; // Already up to date—instant tab switch!
+      if (
+        !force &&
+        sig === lastReducedSignature &&
+        lastReducedProfitRef === gameStore.allPzProfit &&
+        this.reducedGraph.length > 0
+      ) {
+        return;
       }
 
       const { steps, decomposition } = runGraphReduction({
@@ -1310,6 +1317,7 @@ export const useGraphStore = defineStore('graph', {
       this.reduceStepIndex = Math.max(0, steps.length - 1);
       this.syncSolveDecomposition();
       lastReducedSignature = sig;
+      lastReducedProfitRef = gameStore.allPzProfit;
 
       this.clearDpSolution();
     },

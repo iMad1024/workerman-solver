@@ -9,12 +9,6 @@ import {extractNumbers, binarySearch} from '../util.js';
 export const useGameStore = defineStore({
   id: "game",
   state: () => ({
-    // iMad's change
-    //////////////////////////////////////////////////////////////////////
-    // Move some plantzone profit data here so that it can be used in another .vue file directly
-    allPzProfit: null,
-    //////////////////////////////////////////////////////////////////////
-
     ready: false,
     plantzoneDrops: {},
     pzdSet: null,
@@ -463,47 +457,7 @@ export const useGameStore = defineStore({
     // iMad's change
     ////////////////////////////////////////////////////////////////////////////
     nearestTownProfit() {
-      if (this.allPzProfit != null) return this.allPzProfit;
-
-      const ret = {}
-      for (const pzd of Object.values(this.plantzones)) {
-        const pzk = pzd.key
-
-        let towns = this.dijkstraNearestTowns(pzk, 100, undefined, true, false, true)
-        towns.sort((a,b) => a[1]-b[1])
-        
-        let workData = {}
-        let alt_towns_profits = {}
-        for (const townPath of Object.values(towns)) {
-          const [tnk, cp] = townPath
-          const tempData = this.profitPzTownArtisans(pzk, tnk, cp)
-          //if (pzk == 1046) console.log(`allPlantzonesNearestCpTownProfit pzk=${pzk}`, tnk, tempData)
-          if (tnk == 1343) continue // skip Ancado
-          if (tempData.connected) {
-            alt_towns_profits[tempData.tnk] = tempData.priceDaily
-            if (!('priceDaily' in workData)) {
-              workData = tempData
-              continue
-            }
-            if (tempData.priceDaily > workData.priceDaily) {
-              workData = tempData
-            }
-          }
-        }
-        if (!('alt_workers' in workData)) {
-          console.log(workData)
-          throw new Error(`Failed to calc alt_workers for pzk=${pzk}`)
-        }
-        //const alt_towns = Object.entries(alt_towns_profits).map(([tnk, dailyPerCp]) => ({ tnk, dailyPerCp }))
-        const alt_towns = Object.entries(alt_towns_profits).map(([tnk, priceDaily]) => ({ tnk, priceDaily }))
-        //alt_towns.sort((a, b) => b.dailyPerCp - a.dailyPerCp) // without lodgage
-        alt_towns.sort((a, b) => b.priceDaily - a.priceDaily)
-        workData.alt_towns_profits = alt_towns_profits
-        workData.alt_towns = alt_towns
-        ret[pzk] = workData
-      }
-      this.allPzProfit = ret
-      return this.allPzProfit;
+      return this.allPzProfit || {};
     },
     //////////////////////////////////////////////////////////////////////////////
 
@@ -1402,16 +1356,62 @@ export const useGameStore = defineStore({
 
 
 
-    // Or an action/method if it accepts arguments:
-    getSortedChildrenByProfit: (state) => (nodeKey) => {
-      const node = state.nodes[String(nodeKey)];
-      if (!node || !node.children) return [];
+    allPzProfit() {
+      if (!this.ready) return null;
+      const marketStore = useMarketStore();
+      if (marketStore.ready === false) return null;
 
-      return [...node.children].sort((a, b) => {
-        const profitA = state.allPzProfit?.[a]?.dailyPerCp ?? -Infinity;
-        const profitB = state.allPzProfit?.[b]?.dailyPerCp ?? -Infinity;
-        return profitB - profitA; // Decreasing order
-      });
+      const pzList = Object.values(this.plantzones);
+      if (pzList.length === 0) return null;
+
+      const ret = {};
+      for (const pzd of pzList) {
+        const pzk = pzd.key;
+
+        let towns = this.dijkstraNearestTowns(pzk, 100, undefined, true, false, true);
+        towns.sort((a, b) => a[1] - b[1]);
+
+        let workData = {};
+        let alt_towns_profits = {};
+        for (const townPath of Object.values(towns)) {
+          const [tnk, cp] = townPath;
+          const tempData = this.profitPzTownArtisans(pzk, tnk, cp);
+          if (tnk == 1343) continue; // skip Ancado
+          if (tempData.connected) {
+            alt_towns_profits[tempData.tnk] = tempData.priceDaily;
+            if (!('priceDaily' in workData) || tempData.priceDaily > workData.priceDaily) {
+              workData = tempData;
+            }
+          }
+        }
+        if (!('alt_workers' in workData)) {
+          console.log(workData);
+          throw new Error(`Failed to calc alt_workers for pzk=${pzk}`);
+        }
+
+        const alt_towns = Object.entries(alt_towns_profits).map(([tnk, priceDaily]) => ({
+          tnk,
+          priceDaily,
+        }));
+        alt_towns.sort((a, b) => b.priceDaily - a.priceDaily);
+        workData.alt_towns_profits = alt_towns_profits;
+        workData.alt_towns = alt_towns;
+        ret[pzk] = workData;
+      }
+      return ret;
+    },
+
+    getSortedChildrenByProfit() {
+      return (nodeKey) => {
+        const node = this.nodes[String(nodeKey)];
+        if (!node || !node.children) return [];
+
+        return [...node.children].sort((a, b) => {
+          const profitA = this.allPzProfit?.[a]?.dailyPerCp ?? -Infinity;
+          const profitB = this.allPzProfit?.[b]?.dailyPerCp ?? -Infinity;
+          return profitB - profitA;
+        });
+      };
     },
 
 

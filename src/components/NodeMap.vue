@@ -211,7 +211,7 @@ export default {
     }
 
     console.log('NodeMap mounted, sleeping')
-    await until(_ => this.gameStore.ready == true && this.iconsCalc)
+    await until(_ => this.gameStore.ready == true && this.marketStore.ready !== false && this.iconsCalc)
     console.log('resuming')
 
     // Precompute heavy plantzone profits once before deck & layers initialize
