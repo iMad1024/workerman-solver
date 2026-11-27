@@ -297,7 +297,7 @@
 
 <script>
 import { useGameStore } from '../stores/game';
-import EmpireHighsWorker from '../workers/empireHighs.worker.js?worker';
+//import EmpireHighsWorker from '../workers/empireHighs.worker.js?worker';
 
 export default {
   name: 'EmpireHighsTestPanel',
