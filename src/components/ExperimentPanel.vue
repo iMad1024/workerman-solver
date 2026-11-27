@@ -451,15 +451,6 @@ export default {
         );
       }
     },
-
-    togglePopup() {
-      if (this.showPopup) {
-        this.showPopup = false;
-      } else {
-        this.popupPos = { x: 0, y: 0 };
-        this.showPopup = true;
-      }
-    },
     
     syncFromGraphStore() {
       this.config.targetMode = this.graphStore.pzMode === 'topk' ? 'topk' : 'random';
@@ -1094,6 +1085,30 @@ export default {
   );
 }
 
+
+.exp-table-scroll {
+  flex: 1;
+  min-height: 160px;
+  overflow: auto;
+  position: relative;
+  padding-right: 4px;
+}
+
+.exp-resize-e {
+  top: 0;
+  right: 0;
+  width: 3px;
+  height: calc(100% - 16px);
+  cursor: ew-resize;
+}
+
+.exp-resize-s {
+  left: 0;
+  bottom: 0;
+  width: calc(100% - 16px);
+  height: 3px;
+  cursor: ns-resize;
+}
 
 
 </style>

@@ -701,7 +701,7 @@ export function formatExperimentReportParts(config, rows) {
       `Avg 1K+Pol=${avg(rows.map((r) => r.oneKPolishMs)).toFixed(1)}ms | ` +
       `Avg Preproc=${avg(rows.map((r) => r.preprocMs || 0)).toFixed(1)}ms | ` +
       `Greedy 0-gap=${greedyZero}/${rows.length} | ` +
-      `1K+Pol 0-gap=${polishZero}/${rows.length}`; +
+      `1K+Pol 0-gap=${polishZero}/${rows.length}` +
       ` | Grp 1K=Ex=${grp1kMatch}/${exactGrpRows.length}` +
       ` | Pol=Ex=${grpPolMatch}/${exactGrpRows.length}` +
       ` | 1K≠Pol=${grpPolChanged}/${rows.length}`;
