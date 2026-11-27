@@ -2504,6 +2504,77 @@ export async function evaluateContractedDpUpTo(
       }
     }
 
+    const bagSnapshotsByNode = {};
+    const bagSnapshotsByOrig = {};
+
+    function sampleBagTable(tableMap, bag, kind, maxSamples = 5) {
+      const totalStates = countStates(tableMap);
+      const partitionCount = tableMap.size;
+      const top = [];
+
+      for (const [partKey, bucket] of tableMap.entries()) {
+        for (const [tailKey, st] of bucket.entries()) {
+          if (top.length < maxSamples || st.cost < top[top.length - 1].cost) {
+            top.push({ cost: st.cost, partKey, tailKey, st });
+            top.sort((a, b) => a.cost - b.cost);
+            if (top.length > maxSamples) top.pop();
+          }
+        }
+      }
+
+      const samples = top.map(({ cost, partKey, tailKey, st }) => {
+        const comps = [];
+        for (let c = 1; c <= st.numComps; c++) {
+          const verts = [];
+          for (let i = 0; i < bag.length; i++) {
+            if (st.compCodes[i] === c) verts.push(bag[i]);
+          }
+          const groups = [];
+          const gLo = st.compGroupsLo[c];
+          if (gLo !== 0) {
+            for (let g = 0; g < Math.min(32, numGroups); g++) {
+              if ((gLo & (1 << g)) !== 0) groups.push(g);
+            }
+          }
+          if (hasHi && st.compGroupsHi) {
+            const gHi = st.compGroupsHi[c];
+            if (gHi !== 0) {
+              for (let g = 32; g < numGroups; g++) {
+                if ((gHi & (1 << (g - 32))) !== 0) groups.push(g);
+              }
+            }
+          }
+          comps.push({
+            id: c,
+            verts,
+            groups,
+            hasTerm: Boolean((st.hasTermMask >>> c) & 1),
+            hasTown: hasFreeTargets && Boolean((st.hasAnyTownMask >>> c) & 1),
+            needsTown: hasFreeTargets && Boolean((st.needsAnyTownMask >>> c) & 1),
+          });
+        }
+
+        return {
+          cost,
+          compCodes: Array.from(st.compCodes),
+          partKey: typeof partKey === 'number' ? `0x${partKey.toString(16)}` : partKey,
+          partIsInt: typeof partKey === 'number',
+          tailKey: typeof tailKey === 'number' ? String(tailKey) : tailKey,
+          tailIsInt: typeof tailKey === 'number',
+          comps,
+        };
+      });
+
+      return {
+        stage: stageLabel,
+        kind,
+        bag: [...bag],
+        totalStates,
+        partitionCount,
+        samples,
+      };
+    }
+
     function pruneBucketDominance(bucket) {
       const bSize = bucket.size;
       if (bSize <= 1) return 0;
@@ -3604,6 +3675,9 @@ export async function evaluateContractedDpUpTo(
             hopTrace.push(st);
           }
           currBag = midBag;
+          if (!hopTrace) {
+            bagSnapshotsByOrig[midOrigId] = sampleBagTable(currTable, midBag, 'CHAIN', 5);
+          }
           if (currTable.size === 0 || memoryLimitHit) break;
         }
       }
@@ -3691,6 +3765,11 @@ export async function evaluateContractedDpUpTo(
         recordBagTime(uId, performance.now() - tLeaf0, leafCount, 'LEAF');
         fullBagCache.set(uId, leafTable);
         childStateCounts.set(uId, leafCount);
+
+        const leafSnap = sampleBagTable(leafTable, u.bag, 'LEAF', 5);
+        bagSnapshotsByNode[uId] = leafSnap;
+        bagSnapshotsByOrig[u.origBagId ?? uId] = leafSnap;
+
         return leafTable;
       }
 
@@ -3782,6 +3861,11 @@ export async function evaluateContractedDpUpTo(
 
       fullBagCache.set(uId, merged);
       childStateCounts.set(uId, mergedCount);
+
+      const joinSnap = sampleBagTable(merged, u.bag, 'JOIN', 5);
+      bagSnapshotsByNode[uId] = joinSnap;
+      bagSnapshotsByOrig[u.origBagId ?? uId] = joinSnap;
+
       return merged;
     }
 
@@ -3951,6 +4035,11 @@ export async function evaluateContractedDpUpTo(
         ms: Number((performance.now() - passStartMs).toFixed(1)),
       },
       bottleneckBags,
+      bagSnapshots: {
+        stage: stageLabel,
+        byNode: bagSnapshotsByNode,
+        byOrig: bagSnapshotsByOrig,
+      },
     };
   }
 
@@ -3963,6 +4052,7 @@ export async function evaluateContractedDpUpTo(
   let bestHeuristicSolution = null;
   let earlyExactResult = null;
   let ranPolish = false;
+  let lastLadderSnapshots = null;
 
   const targetOrigBagId = nodes[targetNodeId]?.origBagId ?? targetNodeId;
 
@@ -4085,6 +4175,27 @@ export async function evaluateContractedDpUpTo(
       const strict = bestHeuristicSolution != null;
       const res = await runDpPass(step.cap, upperBoundCost, step.label, strict);
       if (!res) return null;
+      if (res.bagSnapshots) {
+        if (!lastLadderSnapshots) {
+          lastLadderSnapshots = {
+            stage: res.bagSnapshots.stage,
+            byNode: { ...res.bagSnapshots.byNode },
+            byOrig: { ...res.bagSnapshots.byOrig },
+          };
+        } else {
+          for (const [k, snapEntry] of Object.entries(res.bagSnapshots.byNode || {})) {
+            if (snapEntry.totalStates > 0 || !lastLadderSnapshots.byNode[k]) {
+              lastLadderSnapshots.byNode[k] = snapEntry;
+            }
+          }
+          for (const [k, snapEntry] of Object.entries(res.bagSnapshots.byOrig || {})) {
+            if (snapEntry.totalStates > 0 || !lastLadderSnapshots.byOrig[k]) {
+              lastLadderSnapshots.byOrig[k] = snapEntry;
+            }
+          }
+          lastLadderSnapshots.stage = res.bagSnapshots.stage;
+        }
+      }
 
       let foundCost = res.bagMergeStats.minCost;
       let validAtTarget = res.bagMergeStats.postForgetStates > 0 && foundCost != null;
@@ -4244,5 +4355,37 @@ export async function evaluateContractedDpUpTo(
   }
 
   finalResult.allSolutions = allSolutions;
+
+  const mergeSnapMaps = (primary = {}, fallback = {}) => {
+    const out = {};
+    const keys = new Set([...Object.keys(fallback), ...Object.keys(primary)]);
+    for (const k of keys) {
+      const p = primary[k];
+      const f = fallback[k];
+      if (p && p.totalStates > 0) {
+        out[k] = p;
+      } else if (p && f && f.totalStates > 0) {
+        out[k] = {
+          ...f,
+          prunedAtStage: p.stage,
+          prunedStageStates: p.totalStates,
+        };
+      } else if (p || f) {
+        out[k] = p || f;
+      }
+    }
+    return out;
+  };
+
+  if (finalResult.bagSnapshots || lastLadderSnapshots) {
+    finalResult.bagSnapshots = {
+      stage: finalResult.bagSnapshots?.stage ?? lastLadderSnapshots?.stage ?? finalLabel,
+      numGroups,
+      hasFreeTargets,
+      byNode: mergeSnapMaps(finalResult.bagSnapshots?.byNode, lastLadderSnapshots?.byNode),
+      byOrig: mergeSnapMaps(finalResult.bagSnapshots?.byOrig, lastLadderSnapshots?.byOrig),
+    };
+  }
+
   return finalResult;
 }

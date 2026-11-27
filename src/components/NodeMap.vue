@@ -68,18 +68,17 @@ const BAG_EDGE_CUT_CONFIG = {
 
 const COMPONENT_UNDERLINE_CONFIG = {
   widthPx: 11,          // Wide underline width in pixels (main white edge is 3px)
-  alpha: 115,           // Semi-transparency 0..255 (~0.45 opacity)
+  alpha: 120,           // Semi-transparency 0..255 (~0.47 opacity)
   palette: [
-    [56, 189, 248],     // Sky Blue
-    [251, 191, 36],     // Amber Gold
-    [168, 85, 247],     // Purple
-    [52, 211, 153],     // Emerald
-    [244, 63, 94],      // Rose
-    [251, 146, 60],     // Orange
-    [45, 212, 191],     // Teal
-    [129, 140, 248],    // Indigo
-    [163, 230, 53],     // Lime
-    [232, 121, 249],    // Fuchsia
+    [56, 189, 248],     // 0: Outside G[V \ T_u] (Sky Blue)
+    [52, 211, 153],     // 1: Left / Child 1 G[T_l \ B_u] (Emerald)
+    [168, 85, 247],     // 2: Right / Child 2 G[T_r \ B_u] (Purple)
+    [244, 63, 94],      // 3: Child 3+ (Rose)
+    [251, 146, 60],     // 4: Child 4+ (Orange)
+    [45, 212, 191],     // 5: Child 5+ (Teal)
+    [129, 140, 248],    // 6: Child 6+ (Indigo)
+    [163, 230, 53],     // 7: Child 7+ (Lime)
+    [232, 121, 249],    // 8: Child 8+ (Fuchsia)
   ],
 };
 
@@ -765,7 +764,8 @@ export default {
           const start = this.iconPositions[a];
           const end = this.iconPositions[b];
           if (start && end) {
-            ret.push({ start, end, color: bgColor });
+            // 1. Inside isSolutionViewActive loop:
+            ret.push({ start, end, color: bgColor, a, b });
           }
         }
         return ret;
@@ -783,6 +783,8 @@ export default {
             start: this.iconPositions[a],
             end: this.iconPositions[b],
             color: this.userStore.isAbstractView ? baseAbstractColor : colorInactive,
+            a,
+            b,
           });
         });
         return ret;
@@ -811,11 +813,11 @@ export default {
 
         if (!aInBag && !bInBag) {
           // Pure component edge: full white line
-          ret.push({ start: posA, end: posB, color: baseAbstractColor });
+           ret.push({ start: posA, end: posB, color: baseAbstractColor, a, b });
         } else if (aInBag && bInBag) {
           // Internal bag edge: both ends are in B_t
           if (cutColor[3] > 0) {
-            ret.push({ start: posA, end: posB, color: cutColor });
+            ret.push({ start: posA, end: posB, color: cutColor, a, b });
           }
         } else {
           // Boundary edge: `bagPos` is in B_t, `freePos` is outside B_t
@@ -829,11 +831,11 @@ export default {
 
           // 1. Cut portion from bag vertex -> cutPos
           if (cutColor[3] > 0 && t > 0) {
-            ret.push({ start: bagPos, end: cutPos, color: cutColor });
+            ret.push({ start: bagPos, end: cutPos, color: cutColor, a, b });
           }
           // 2. Remaining portion from cutPos -> non-bag vertex
           if (t < 1) {
-            ret.push({ start: cutPos, end: freePos, color: baseAbstractColor });
+            ret.push({ start: cutPos, end: freePos, color: baseAbstractColor, a, b });
           }
         }
       }
@@ -855,121 +857,183 @@ export default {
         const start = this.iconPositions[a];
         const end = this.iconPositions[b];
         if (start && end) {
-          ret.push({ start, end, color: solColor });
+          ret.push({ start, end, color: solColor, a, b });
         }
       }
       return ret;
     },
 
     solveBagPartitionData() {
+      const td = this.graphStore?.activeDecomposition;
+      const activeNode = this.graphStore?.activeTreeNode;
+
       if (
         !this.userStore?.isAltView ||
         this.graphStore?.activeTab !== 'solve' ||
-        !this.graphStore?.activeTreeNode ||
+        !td ||
+        !activeNode ||
         this.isSolutionViewActive
       ) {
         return { bagNodes: [], componentEdges: [], componentCount: 0, components: [] };
       }
 
-      const bagKeys = this.graphStore.activeTreeNode.bag || [];
-      const bagSet = new Set(bagKeys.map(Number));
+      const fullNodes = this.graphStore?.treeDecomposition?.nodes || [];
+      const bagSet = new Set((activeNode.bag || []).map(Number));
       const links = this.graphStore.getActiveGraphLinks || {};
       const targetSet = this.graphStore.targetSet || new Set();
+      const { palette, alpha } = COMPONENT_UNDERLINE_CONFIG;
 
-      // 1. Collect positions for vertices in the active bag B_t
+      // 1. Collect positions for separator vertices in active bag B_u
       const bagNodes = [];
       for (const k of bagSet) {
         const pos = this.iconPositions?.[k];
         if (pos) bagNodes.push({ key: k, pos });
       }
 
-      // 2. BFS on G \ B_t to find connected components & per-component stats
-      const nodeToComp = new Map();
-      const compMeta = [];
-      let compIdx = 0;
-
-      for (const rawU of Object.keys(links)) {
-        const u = Number(rawU);
-        if (bagSet.has(u) || nodeToComp.has(u)) continue;
-
-        const queue = [u];
-        nodeToComp.set(u, compIdx);
-        let head = 0;
-        let targetCount = 0;
-
-        while (head < queue.length) {
-          const curr = queue[head++];
-          if (targetSet.has(curr)) targetCount++;
-
-          for (const rawV of links[curr] || []) {
-            const v = Number(rawV);
-            if (!bagSet.has(v) && !nodeToComp.has(v)) {
-              nodeToComp.set(v, compIdx);
-              queue.push(v);
+      // 2. Collect all vertices in T_c (including intermediate bags on contracted unary paths)
+      const collectSubtreeVerts = (startId) => {
+        const visited = new Set();
+        const verts = new Set();
+        const dfs = (id) => {
+          if (id == null || visited.has(id)) return;
+          visited.add(id);
+          const n = td.nodes[id];
+          if (!n) return;
+          for (const v of n.bag || []) verts.add(Number(v));
+          for (const cid of n.children || []) {
+            const chainOrigIds = n.transitions?.[cid]?.chainOrigIds || [];
+            for (let i = 0; i < chainOrigIds.length; i++) {
+              const fb = fullNodes[chainOrigIds[i]]?.bag;
+              if (fb) {
+                for (let j = 0; j < fb.length; j++) verts.add(Number(fb[j]));
+              }
             }
+            dfs(cid);
+          }
+        };
+        dfs(startId);
+        return verts;
+      };
+
+      // 3. Partition V \ B_u into:
+      //    Region 0: V \ T_u (outside subtree rooted at u)
+      //    Region 1..k: T_{c_i} \ B_u (each child subtree minus B_u)
+      const nodeToRegion = new Map();
+      const children = activeNode.children || [];
+      const regionMeta = [];
+
+      const makeRegionEntry = (id, labelMain, labelSub, roleTitle) => {
+        const rgb = palette[id % palette.length];
+        return {
+          id,
+          labelMain,
+          labelSub,
+          roleTitle,
+          rgb,
+          cssColor: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`,
+          nodeCount: 0,
+          edgeCount: 0,
+          targetCount: 0,
+        };
+      };
+
+      regionMeta.push(
+        makeRegionEntry(0, 'V \\ T', 'u', 'Outside subtree T_u: G[V \\ T_u]')
+      );
+
+      for (let idx = 0; idx < children.length; idx++) {
+        const cid = children[idx];
+        const childNode = td.nodes[cid];
+        const childBagTag = childNode ? `#${childNode.origBagId ?? childNode.id}` : '';
+        const subLabel =
+          children.length === 1
+            ? 'c'
+            : children.length === 2
+              ? idx === 0
+                ? 'l'
+                : 'r'
+              : `c${idx + 1}`;
+
+        const regId = idx + 1;
+        regionMeta.push(
+          makeRegionEntry(
+            regId,
+            'T',
+            subLabel,
+            `Child subtree ${childBagTag}: G[T_${subLabel} \\ B_u]`
+          )
+        );
+
+        const childVerts = collectSubtreeVerts(cid);
+        const edgeChain = activeNode.transitions?.[cid]?.chainOrigIds || [];
+        for (let i = 0; i < edgeChain.length; i++) {
+          const fb = fullNodes[edgeChain[i]]?.bag;
+          if (fb) {
+            for (let j = 0; j < fb.length; j++) childVerts.add(Number(fb[j]));
           }
         }
 
-        const rgb = COMPONENT_UNDERLINE_CONFIG.palette[compIdx % COMPONENT_UNDERLINE_CONFIG.palette.length];
-        compMeta.push({
-          id: compIdx,
-          rgb,
-          cssColor: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`,
-          nodeCount: queue.length,
-          edgeCount: 0,
-          targetCount,
-        });
-        compIdx++;
+        for (const v of childVerts) {
+          if (!bagSet.has(v)) {
+            nodeToRegion.set(v, regId);
+          }
+        }
       }
 
-      // 3. Build colored underline segments:
-      //    - Full edge if both endpoints are in G \ B_t (same component)
-      //    - Half-way stub from non-bag endpoint if the other endpoint is in B_t
-      const { palette, alpha } = COMPONENT_UNDERLINE_CONFIG;
+      // Remaining vertices outside B_u belong to V \ T_u (Region 0)
+      for (const rawU of Object.keys(links)) {
+        const u = Number(rawU);
+        if (bagSet.has(u)) continue;
+        const regId = nodeToRegion.has(u) ? nodeToRegion.get(u) : 0;
+        nodeToRegion.set(u, regId);
+        regionMeta[regId].nodeCount++;
+        if (targetSet.has(u)) regionMeta[regId].targetCount++;
+      }
+
+      // 4. Build colored edge underlays for G[V \ T_u] and each G[T_{c_i} \ B_u]
       const componentEdges = [];
 
       for (const [a, b] of this.activeGraphEdges) {
         const aInBag = bagSet.has(a);
         const bInBag = bagSet.has(b);
 
-        if (aInBag && bInBag) continue; // Both inside active bag
+        if (aInBag && bInBag) continue; // Internal separator edge inside B_u
 
         const posA = this.iconPositions[a];
         const posB = this.iconPositions[b];
         if (!posA || !posB) continue;
 
         if (!aInBag && !bInBag) {
-          // Internal component edge
-          const cId = nodeToComp.get(a);
-          if (cId === undefined) continue;
+          const regA = nodeToRegion.get(a);
+          const regB = nodeToRegion.get(b);
+          if (regA === undefined || regA !== regB) continue;
 
-          compMeta[cId].edgeCount++;
-          const rgb = palette[cId % palette.length];
+          regionMeta[regA].edgeCount++;
+          const rgb = regionMeta[regA].rgb;
           componentEdges.push({
             start: posA,
             end: posB,
-            componentId: cId,
+            componentId: regA,
             color: [rgb[0], rgb[1], rgb[2], alpha],
           });
         } else {
-          // Boundary edge between non-bag vertex `u` and bag vertex `v`:
-          // Draw half-way from `u` toward `v` so isolated/boundary vertices show component color
+          // Boundary edge touching separator B_u: draw half-stub from region vertex toward B_u
           const u = aInBag ? b : a;
           const startPos = aInBag ? posB : posA;
           const bagPos = aInBag ? posA : posB;
 
-          const cId = nodeToComp.get(u);
-          if (cId === undefined) continue;
+          const regId = nodeToRegion.get(u);
+          if (regId === undefined) continue;
 
           const midPos = [
             (startPos[0] + bagPos[0]) * 0.5,
             (startPos[1] + bagPos[1]) * 0.5,
           ];
-          const rgb = palette[cId % palette.length];
+          const rgb = regionMeta[regId].rgb;
           componentEdges.push({
             start: startPos,
             end: midPos,
-            componentId: cId,
+            componentId: regId,
             color: [rgb[0], rgb[1], rgb[2], alpha],
           });
         }
@@ -978,8 +1042,8 @@ export default {
       return {
         bagNodes,
         componentEdges,
-        componentCount: compIdx,
-        components: compMeta,
+        componentCount: regionMeta.length,
+        components: regionMeta,
       };
     },
 
@@ -1147,6 +1211,10 @@ export default {
     },
 
     makeAltSolLineLayer() {
+      const canPickEdge =
+        this.graphStore?.activeTab === 'solve' &&
+        Boolean(this.graphStore?.activeDecomposition);
+
       return new LineLayer({
         id: 'alt-sol-line-layer',
         data: this.altSolLinesCalc,
@@ -1154,6 +1222,10 @@ export default {
         getTargetPosition: d => d.end,
         getColor: d => d.color,
         widthMinPixels: this.userStore.isAbstractView ? 3 : 2,
+        pickable: canPickEdge,
+        autoHighlight: canPickEdge,
+        highlightColor: [56, 189, 248, 255],
+        onHover: this.handleEdgeHover,
         parameters: { depthTest: false },
         updateTriggers: {
           widthMinPixels: [this.userStore.isAbstractView],
@@ -1350,12 +1422,31 @@ export default {
     handleNodeHover(info) {
       const newKey = info?.object ? info.object.key : null;
 
+      if (newKey != null) {
+        this.graphStore.hoveredMapEntity = { type: 'node', key: Number(newKey) };
+      } else if (this.graphStore.hoveredMapEntity?.type === 'node') {
+        this.graphStore.hoveredMapEntity = null;
+      }
+
       if (this.hoveredNodeKey !== newKey && !this.selectedNodeKey) {
         this.hoveredNodeKey = newKey;
         this.refreshHalo(); // Only updates the halo layer; preserves existing icons!
       }
 
       this.$emit('update:hoverInfo', info);
+    },
+
+    handleEdgeHover(info) {
+      const edge = info?.object;
+      if (edge && edge.a != null && edge.b != null) {
+        this.graphStore.hoveredMapEntity = {
+          type: 'edge',
+          a: Number(edge.a),
+          b: Number(edge.b),
+        };
+      } else if (this.graphStore.hoveredMapEntity?.type === 'edge') {
+        this.graphStore.hoveredMapEntity = null;
+      }
     },
 
     handleNodeClick(info, event) {
@@ -1783,6 +1874,10 @@ export default {
     },
 
     makeAltLineLayer() {
+      const canPickEdge =
+        this.graphStore?.activeTab === 'solve' &&
+        Boolean(this.graphStore?.activeDecomposition);
+
       return new LineLayer({
         id: 'alt-line-layer',
         data: this.altLinesCalc,
@@ -1790,6 +1885,10 @@ export default {
         getTargetPosition: d => d.end,
         getColor: d => d.color,
         widthMinPixels: this.userStore.isAbstractView ? 3 : 1,
+        pickable: canPickEdge,
+        autoHighlight: canPickEdge,
+        highlightColor: [56, 189, 248, 255],
+        onHover: this.handleEdgeHover,
         updateTriggers: {
           widthMinPixels: [this.userStore.isAbstractView],
           getColor: [
@@ -1808,7 +1907,7 @@ export default {
           0, 0, 1, 0,
           0, 0, 0, 1
         ],
-      })
+      });
     },
 
 
@@ -2147,7 +2246,7 @@ export default {
     {{ hiddenNodesCount }} inactive nodes hidden (<a href="#" @click="userStore.mapHideInactive = false">show</a>)
   </div>
 
-  <!-- Solve Tab: Draggable Bag Separator & Connected Components Table -->
+  <!-- Solve Tab: Draggable Subtree Separator Partition Legend -->
   <div
     v-if="userStore.isAltView && graphStore.activeTab === 'solve' && graphStore.activeTreeNode && !isSolutionViewActive"
     ref="solveLegend"
@@ -2160,7 +2259,7 @@ export default {
       <div class="legend-title-group">
         <span class="legend-grip">⋮⋮</span>
         <span class="legend-title">
-          G \ B<sub>{{ graphStore.activeTreeNode.origBagId ?? graphStore.activeTreeNode.id }}</sub> Components
+          Subtree Partition · B<sub>{{ graphStore.activeTreeNode.origBagId ?? graphStore.activeTreeNode.id }}</sub>
         </span>
       </div>
       <span class="legend-count-pill">
@@ -2171,23 +2270,19 @@ export default {
     <!-- Active Bag X indicator -->
     <div class="legend-bag-row">
       <span class="legend-x-glyph" :style="{ color: bagXColor }">✕</span>
-      <span>Active Bag (|B| = {{ solveBagPartitionData.bagNodes.length }})</span>
+      <span>Separator B<sub>u</sub> (|B<sub>u</sub>| = {{ solveBagPartitionData.bagNodes.length }})</span>
     </div>
 
     <div class="legend-divider"></div>
 
-    <div v-if="solveBagPartitionData.components.length === 0" class="legend-empty">
-      No vertices outside bag
-    </div>
-
     <!-- Borderless Aligned Table -->
-    <div v-else class="legend-table">
+    <div class="legend-table">
       <div class="legend-table-head">
         <span></span>
-        <span></span>
+        <span>Region</span>
         <span class="col-num">|V|</span>
         <span class="col-num">|E|</span>
-        <span class="col-num" title="Target vertices in component">|T|</span>
+        <span class="col-num" title="Target vertices in region">|T|</span>
       </div>
 
       <div class="legend-list">
@@ -2195,6 +2290,7 @@ export default {
           v-for="comp in solveBagPartitionData.components"
           :key="comp.id"
           class="legend-grid-row"
+          :title="comp.roleTitle"
         >
           <span
             class="legend-swatch"
@@ -2203,7 +2299,14 @@ export default {
               boxShadow: `0 0 6px ${comp.cssColor}`
             }"
           ></span>
-          <span class="legend-comp-name">C{{ comp.id + 1 }}</span>
+          <span class="legend-comp-name">
+            <template v-if="comp.id === 0">
+              V \ T<sub>u</sub>
+            </template>
+            <template v-else>
+              T<sub>{{ comp.labelSub }}</sub> \ B<sub>u</sub>
+            </template>
+          </span>
           <span class="col-num">{{ comp.nodeCount }}</span>
           <span class="col-num">{{ comp.edgeCount }}</span>
           <span
@@ -2338,7 +2441,7 @@ export default {
 .legend-table-head,
 .legend-grid-row {
   display: grid;
-  grid-template-columns: 16px 28px 36px 36px 32px;
+  grid-template-columns: 16px 64px 36px 36px 32px;
   align-items: center;
   column-gap: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

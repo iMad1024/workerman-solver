@@ -29,6 +29,8 @@ import ExperimentPanel from '../components/ExperimentPanel.vue';
 import { buildContractedDpTree } from '../utils/graphReduction';
 import SteinerDpWorker from '../workers/steinerDp.worker.js?worker';
 
+import EmpireHighsTestPanel from '../components/EmpireHighsTestPanel.vue';
+import PdfDetailsModal from '../components/PdfDetailsModal.vue';
 
 export default {
   setup() {
@@ -54,6 +56,8 @@ export default {
     const treewidth = ref(null);
     const joinCount = ref(0);
 
+    const showNotes = ref(false);
+
     return {
       gameStore,
       userStore,
@@ -62,6 +66,7 @@ export default {
       mapStore,
 
       graphStore,
+      showNotes,
     };
   },
   
@@ -84,6 +89,8 @@ export default {
     SearchBar,
     GraphProcessingPanel,
     ExperimentPanel,
+    EmpireHighsTestPanel,
+    PdfDetailsModal,
   },
 
   data: () => ({
@@ -1505,6 +1512,16 @@ export default {
             </button>
 
             <ExperimentPanel />
+
+            <!-- In HomeView.vue template -->
+            <!-- <button type="button" @click="showHighsTest = !showHighsTest">HiGHS Test</button>
+            <EmpireHighsTestPanel v-if="showHighsTest" @close="showHighsTest = false" /> -->
+
+            <button type="button" class="chip-toggle route-chip-btn" @click="showNotes = true">
+              <span class="chip-dot"></span>
+              <span>Details</span>
+            </button>
+            <PdfDetailsModal :open="showNotes" @close="showNotes = false" />
 
             <button
               type="button"

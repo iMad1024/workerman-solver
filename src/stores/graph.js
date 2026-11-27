@@ -136,6 +136,7 @@ export const useGraphStore = defineStore('graph', {
       activeSolutionIndex: 0,
 
       legendResetTick: 0,
+      hoveredMapEntity: null, // null | { type: 'node', key: number } | { type: 'edge', a: number, b: number }
     };
   },
 

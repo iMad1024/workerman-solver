@@ -793,7 +793,7 @@ export default {
 
 <style>
 .exp-popup-window {
-  --exp-popup-width: 1200px; /* <--- Adjust popup width here (e.g. 1040px..1300px) */
+  --exp-popup-width: 1220px; /* <--- Adjust popup width here (e.g. 1040px..1300px) */
   position: fixed;
   top: 64px;
   width: var(--exp-popup-width);

@@ -1414,12 +1414,82 @@
           </div>
 
           <div v-if="solveSections.tree" class="td-tree-svg-wrap">
+            <span v-if="fullTreeSvgData.hasHover" class="td-tree-hover-badge">
+              {{ fullTreeSvgData.hoverSummary }}
+            </span>
             <span class="td-tree-zoom-badge">{{ treeZoomLevel.toFixed(1) }}x</span>
+            <div
+              v-if="hoveredTreeNode"
+              class="td-dp-hover-popover"
+              :class="`popover-${dpPopoverSide}`"
+            >
+              <div class="dp-pop-header">
+                <span class="dp-pop-title">
+                  Bag #{{ hoveredTreeNode.displayId }}
+                  <small>(|B|={{ hoveredTreeNode.bagLen }}, d={{ hoveredTreeNode.depth }})</small>
+                </span>
+                <span v-if="hoveredBagSnapshot" class="dp-pop-badge">
+                  {{ hoveredBagSnapshot.prunedAtStage
+                    ? `${hoveredBagSnapshot.prunedAtStage}: 0 · ${hoveredBagSnapshot.stage}`
+                    : hoveredBagSnapshot.stage }}
+                </span>
+              </div>
+
+              <template v-if="hoveredBagSnapshot">
+                <div class="dp-pop-meta">
+                  <span>
+                    States: <strong>{{ hoveredBagSnapshot.totalStates.toLocaleString() }}</strong>
+                    ({{ hoveredBagSnapshot.partitionCount }} parts)
+                  </span>
+                  <span v-if="hoveredBagSnapshot.samples.length" class="dp-pop-enc">
+                    {{ hoveredBagSnapshot.samples[0].partIsInt ? 'int' : 'str' }}/{{ hoveredBagSnapshot.samples[0].tailIsInt ? 'int' : 'str' }}
+                  </span>
+                </div>
+
+                <div class="dp-pop-bag-line">
+                  B = [{{ hoveredBagSnapshot.bag.join(', ') }}]
+                </div>
+
+                <div v-if="hoveredBagSnapshot.samples.length === 0" class="dp-pop-empty">
+                  All states pruned at this bag
+                </div>
+
+                <div v-else class="dp-pop-list">
+                  <div
+                    v-for="(s, idx) in hoveredBagSnapshot.samples"
+                    :key="idx"
+                    class="dp-pop-state"
+                  >
+                    <div class="dp-pop-state-top">
+                      <span class="dp-pop-part">[{{ s.compCodes.join(' ') }}]</span>
+                      <span class="dp-pop-cost">CP {{ s.cost }}</span>
+                    </div>
+                    <div class="dp-pop-comps">
+                      <span v-if="s.comps.length === 0" class="dp-pop-dim">∅ (none selected)</span>
+                      <span
+                        v-for="c in s.comps"
+                        :key="c.id"
+                        class="dp-pop-comp-chip"
+                      >
+                        C{{ c.id }}:{<template v-for="(v, vi) in c.verts" :key="v">{{ vi ? ',' : '' }}{{ v }}</template>}<template v-if="c.groups.length"> g[{{ c.groups.join(',') }}]</template><template v-if="c.needsTown"> ?T</template><template v-else-if="c.hasTown"> ★</template>
+                      </span>
+                    </div>
+                    <div class="dp-pop-keys">
+                      p={{ s.partKey }} · t={{ s.tailKey }}
+                    </div>
+                  </div>
+                </div>
+              </template>
+
+              <div v-else class="dp-pop-empty">
+                Run Solve DP to inspect DP states
+              </div>
+            </div>
             <svg
               ref="treeSvg"
               :viewBox="treeViewBox"
               class="td-tree-svg"
-              :class="{ 'is-panning': isPanningTree }"
+              :class="{ 'is-panning': isPanningTree, 'has-map-hover': fullTreeSvgData.hasHover }"
               @wheel.prevent="onTreeWheel"
               @mousedown="startTreePan"
               @dblclick="focusActiveTreeNode(4)"
@@ -1432,7 +1502,11 @@
                   :y1="e.y1"
                   :x2="e.x2"
                   :y2="e.y2"
-                  :class="{ 'edge-path': e.isPath, 'edge-adj': e.isAdj }"
+                  :class="{
+                    'edge-path': e.isPath,
+                    'edge-adj': e.isAdj,
+                    'edge-td-match': e.isHoverMatch
+                  }"
                 />
               </g>
               <g class="td-nodes" :style="{ '--inv-z': fullTreeSvgData.invZ }">
@@ -1441,23 +1515,24 @@
                     :cx="n.cx"
                     :cy="n.cy"
                     :r="n.r"
-                    :style="!n.isActive && !n.isParent && !n.isChild ? { fill: n.heatColor } : null"
+                    :style="!n.isActive && !n.isParent && !n.isChild && !n.isHoverMatch ? { fill: n.heatColor } : null"
                     :class="{
                       'node-active': n.isActive,
                       'node-parent': n.isParent,
-                      'node-child': n.isChild
+                      'node-child': n.isChild,
+                      'node-td-match': n.isHoverMatch
                     }"
+                    @mouseenter="onTreeNodeHover(n)"
+                    @mouseleave="onTreeNodeHover(null)"
                     @click.stop="onTreeNodeClick(n.id)"
-                  >
-                    <title>Bag #{{ n.displayId }} · size {{ n.bagLen }} · depth {{ n.depth }}</title>
-                  </circle>
+                  />
                   <text
-                    v-if="treeZoomLevel >= 2.2 && n.isAncestor"
+                    v-if="(treeZoomLevel >= 2.2 && n.isAncestor) || n.isHoverMatch"
                     :x="n.cx + n.r + 2 * fullTreeSvgData.invZ"
                     :y="n.cy + 2.2 * fullTreeSvgData.invZ"
                     :font-size="7.5 * fullTreeSvgData.invZ"
                     class="tree-zoom-label"
-                    :class="{ 'is-active-label': n.isActive }"
+                    :class="{ 'is-active-label': n.isActive || n.isHoverMatch }"
                   >
                     #{{ n.displayId }}
                   </text>
@@ -1686,6 +1761,9 @@ export default {
         tree: true,
         bagInfo: true,
       },
+
+      hoveredTreeNode: null,
+      dpPopoverSide: 'left', // 'left' | 'right'
     };
   },
   watch: {
@@ -1773,6 +1851,15 @@ export default {
     },
   },
   computed: {
+    hoveredBagSnapshot() {
+      const n = this.hoveredTreeNode;
+      const snaps = this.dpSandboxResult?.bagSnapshots;
+      if (!n || !snaps) return null;
+      return this.graphStore.tdViewMode === 'join'
+        ? snaps.byNode?.[n.id] ?? snaps.byOrig?.[n.displayId] ?? null
+        : snaps.byOrig?.[n.displayId] ?? null;
+    },
+
     solutionBagId() {
       return (
         this.graphStore.dpSolution?.bagId ??
@@ -1856,8 +1943,9 @@ export default {
     fullTreeSvgData() {
       const td = this.graphStore.activeDecomposition;
       const active = this.activeTreeNode;
-      if (!td || !td.nodes?.length || !active) return { edges: [], nodes: [], invZ: 1 };
-      // ... rest unchanged, using `n.origBagId ?? n.id` for displayLabel ...
+      if (!td || !td.nodes?.length || !active) {
+        return { edges: [], nodes: [], invZ: 1, hasHover: false, hoverSummary: '' };
+      }
 
       const padX = 12;
       const padY = 12;
@@ -1869,6 +1957,24 @@ export default {
       const z = this.treeZoomLevel;
       const invZ = 1 / Math.pow(z, 0.72);
 
+      const hover = this.graphStore.hoveredMapEntity;
+      const hasHover = Boolean(hover);
+      const fullNodes = this.graphStore.treeDecomposition?.nodes || [];
+      const isJoinMode = this.graphStore.tdViewMode === 'join';
+
+      const bagMatches = (bag) => {
+        if (!hover || !bag) return false;
+        const set = new Set(bag.map(Number));
+        if (hover.type === 'node') return set.has(hover.key);
+        if (hover.type === 'edge') return set.has(hover.a) && set.has(hover.b);
+        return false;
+      };
+
+      const matchedNodeIds = new Set();
+      for (const n of td.nodes) {
+        if (bagMatches(n.bag)) matchedNodeIds.add(n.id);
+      }
+
       const ancestorSet = new Set();
       let curr = active;
       while (curr) {
@@ -1878,6 +1984,7 @@ export default {
 
       const childSet = new Set(active.children || []);
       const edges = [];
+      let chainMatchCount = 0;
 
       const nodes = td.nodes.map((n) => {
         const cx = padX + (n.x ?? 0.5) * w;
@@ -1886,14 +1993,27 @@ export default {
         const isParent = n.id === active.parent;
         const isChild = childSet.has(n.id);
         const isAncestor = ancestorSet.has(n.id);
+        const isHoverMatch = matchedNodeIds.has(n.id);
 
-        // Uniform green (142deg) -> yellow (52deg) -> crimson-red (354deg / -6deg)
         const t = maxSz === minSz ? 0.5 : (n.bag.length - minSz) / szSpan;
         const hue = (142 - t * 148 + 360) % 360;
         const heatColor = `hsl(${hue.toFixed(0)}, 85%, 56%)`;
 
         if (n.parent != null) {
           const p = td.nodes[n.parent];
+          let edgeHoverMatch = isHoverMatch && matchedNodeIds.has(p.id);
+
+          if (!edgeHoverMatch && hasHover && isJoinMode) {
+            const chain = p.transitions?.[n.id]?.chainOrigIds || [];
+            for (let i = 0; i < chain.length; i++) {
+              if (bagMatches(fullNodes[chain[i]]?.bag)) {
+                edgeHoverMatch = true;
+                chainMatchCount++;
+                break;
+              }
+            }
+          }
+
           edges.push({
             id: `${p.id}-${n.id}`,
             x1: padX + (p.x ?? 0.5) * w,
@@ -1902,11 +2022,18 @@ export default {
             y2: cy,
             isPath: isAncestor && ancestorSet.has(p.id),
             isAdj: isActive || isChild,
+            isHoverMatch: edgeHoverMatch,
           });
         }
 
         const baseR = 1.7 + (n.bag.length / maxSz) * 1.6;
-        const rawR = isActive ? 4.8 : (isParent || isChild ? 3.5 : baseR);
+        const rawR = isHoverMatch
+          ? Math.max(4.4, baseR * 1.45)
+          : isActive
+            ? 4.8
+            : isParent || isChild
+              ? 3.5
+              : baseR;
 
         return {
           id: n.id,
@@ -1921,10 +2048,24 @@ export default {
           isParent,
           isChild,
           isAncestor,
+          isHoverMatch,
         };
       });
 
-      return { edges, nodes, invZ };
+      let hoverSummary = '';
+      if (hover) {
+        const subject =
+          hover.type === 'node' ? `v = ${hover.key}` : `e = (${hover.a}, ${hover.b})`;
+        const countText =
+          matchedNodeIds.size > 0
+            ? `${matchedNodeIds.size} bag${matchedNodeIds.size === 1 ? '' : 's'}`
+            : chainMatchCount > 0
+              ? `${chainMatchCount} contracted edge${chainMatchCount === 1 ? '' : 's'}`
+              : '0 bags';
+        hoverSummary = `${subject} · ${countText}`;
+      }
+
+      return { edges, nodes, invZ, hasHover, hoverSummary };
     },
     
     tdStats() {
@@ -2066,6 +2207,14 @@ export default {
     },
   },
   methods: {
+    onTreeNodeHover(node) {
+      this.hoveredTreeNode = node;
+      if (!node || !this.$el) return;
+      const rect = this.$el.getBoundingClientRect();
+      const panelCenterX = rect.left + rect.width / 2;
+      this.dpPopoverSide = panelCenterX < window.innerWidth / 2 ? 'right' : 'left';
+    },
+
     formatStageMs(ms) {
       const n = Number(ms);
       if (!Number.isFinite(n)) return '';
@@ -5606,6 +5755,179 @@ export default {
   padding: 0;
   margin-left: 0;
   flex-shrink: 0;
+}
+
+.td-tree-hover-badge {
+  position: absolute;
+  top: 5px;
+  left: 6px;
+  z-index: 2;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(10, 15, 24, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #e0f2fe;
+  pointer-events: none;
+  user-select: none;
+}
+
+.td-tree-svg.has-map-hover .td-nodes circle:not(.node-td-match) {
+  opacity: 0.24;
+}
+
+.td-tree-svg.has-map-hover .td-edges line:not(.edge-td-match) {
+  opacity: 0.16;
+}
+
+.td-edges line.edge-td-match {
+  stroke: #38bdf8;
+  stroke-width: calc(2.4px * var(--inv-z, 1));
+  opacity: 1;
+  filter: drop-shadow(0 0 3px rgba(56, 189, 248, 0.85));
+}
+
+.td-nodes circle.node-td-match {
+  fill: #38bdf8;
+  stroke: #ffffff;
+  stroke-width: calc(1.6px * var(--inv-z, 1));
+  opacity: 1;
+  filter: drop-shadow(0 0 5px #38bdf8);
+}
+
+.td-dp-hover-popover {
+  position: absolute;
+  top: 0;
+  right: calc(100% + 34px);
+  width: 288px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(11, 16, 24, 0.94);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(56, 189, 248, 0.42);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.72);
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  pointer-events: none;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.td-dp-hover-popover.popover-right {
+  right: auto;
+  left: calc(100% + 34px);
+}
+
+.dp-pop-header,
+.dp-pop-meta,
+.dp-pop-state-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.dp-pop-title {
+  font-weight: 700;
+  color: #e0f2fe;
+}
+
+.dp-pop-title small {
+  font-weight: 500;
+  color: #64748b;
+}
+
+.dp-pop-badge {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(56, 189, 248, 0.16);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  color: #7dd3fc;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.dp-pop-meta {
+  color: #94a3b8;
+  font-size: 9.5px;
+}
+
+.dp-pop-meta strong {
+  color: #f8fafc;
+}
+
+.dp-pop-enc {
+  color: #a7f3d0;
+  font-size: 9px;
+}
+
+.dp-pop-bag-line {
+  color: #93c5fd;
+  font-size: 9.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dp-pop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.dp-pop-state {
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dp-pop-part {
+  color: #fde68a;
+  font-weight: 700;
+}
+
+.dp-pop-cost {
+  color: #34d399;
+  font-weight: 700;
+}
+
+.dp-pop-comps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.dp-pop-comp-chip {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(56, 189, 248, 0.12);
+  color: #bae6fd;
+  font-size: 9px;
+}
+
+.dp-pop-keys {
+  color: #64748b;
+  font-size: 8.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dp-pop-empty,
+.dp-pop-dim {
+  color: #64748b;
+  font-style: italic;
 }
 
 </style>
